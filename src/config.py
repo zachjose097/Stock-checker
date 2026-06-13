@@ -1,11 +1,12 @@
 # Central config - all the tunable knobs live here, not scattered in the signals
 
 # Weight of each signal in the blended score - should sum to 1.0
-# Price action gets more trust than analyst targets (lagging, herd-y)
+# Fundamentals weighted up for small/mid-cap focus — growth story matters more than
+# analyst consensus, which is sparse or absent for smaller names.
 SIGNAL_WEIGHTS = {"momentum": 0.35,
                   "volume": 0.20,
-                  "fundamentals": 0.30,
-                  "targets": 0.15}
+                  "fundamentals": 0.40,
+                  "targets": 0.05}
 
 # Score thresholds for the final verdict
 # Blended score runs -1 (strong sell) to +1 (strong buy)

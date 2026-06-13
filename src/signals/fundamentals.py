@@ -146,8 +146,10 @@ class FundamentalsSignal(Signal):
         earn_qtr    = growth.get("earnings_quarterly_growth")
 
         if rev_growth is not None:
-            # YoY change in total revenue
-            if rev_growth >= 0.25:
+            # YoY change in total revenue. Small/mid caps at 40%+ are in hypergrowth territory.
+            if rev_growth >= 0.40:
+                score += 0.25    # hypergrowth — exceptional for any size company
+            elif rev_growth >= 0.25:
                 score += 0.15    # strong top-line expansion
             elif rev_growth >= 0.10:
                 score += 0.08    # healthy growth
@@ -159,7 +161,9 @@ class FundamentalsSignal(Signal):
 
         if earn_growth is not None:
             # YoY change in net income
-            if earn_growth >= 0.25:
+            if earn_growth >= 0.40:
+                score += 0.25    # hypergrowth earnings
+            elif earn_growth >= 0.25:
                 score += 0.15
             elif earn_growth >= 0.10:
                 score += 0.08
@@ -377,6 +381,7 @@ class FundamentalsSignal(Signal):
         values = {
             "sector":           sector,
             "sector_type":      sector_type,
+            "market_cap":       market_cap,
             "forward_pe":       valuation.get("forward_pe"),
             "trailing_pe":      valuation.get("trailing_pe"),
             "peg_ratio":        valuation.get("peg_ratio"),

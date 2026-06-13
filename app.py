@@ -31,12 +31,22 @@ from get_data import MarketData
 from main import run_signals, weighted_blend, blend_verdict
 from judge import Judge
 
-# Default watchlist for the scan tab — a spread of large/mid caps across growth and
-# value sectors, mirroring scan.py. The user can edit this freely in the UI.
+# Default watchlist for the scan tab — small/mid-cap names ($300M–$10B market cap)
+# skewed toward growth sectors where upside potential is highest.
+# The user can edit this freely in the UI.
 DEFAULT_WATCHLIST = [
-    "NVDA", "META", "GOOGL", "MSFT", "AMZN", "AAPL", "AVGO", "AMD", "CRM", "NFLX",
-    "PLTR", "UBER", "SHOP", "ANET", "MU", "TSM", "ORCL", "NOW", "ADBE", "QCOM",
-    "JPM", "GS", "XOM", "CVX", "WMT", "COST", "LLY", "UNH", "CAT", "GE",
+    # Tech / software (mid-cap)
+    "GTLB", "DDOG", "BILL", "TOST", "SMAR", "MNDY", "DUOL", "HOOD", "RXRX",
+    # Semiconductors / hardware (small-mid)
+    "ACMR", "ONTO", "FORM", "AMBA", "WOLF",
+    # Healthcare / biotech (small-mid)
+    "RXRX", "AGIO", "DAWN", "IOVA", "FOLD",
+    # Consumer / retail (mid-cap growth)
+    "CAVA", "CELH", "SHAK", "BLMN", "XPOF",
+    # Industrial / clean energy (small-mid)
+    "RKLB", "JOBY", "ACHR", "STEM", "ARRY",
+    # Fintech (small-mid)
+    "AFRM", "OPEN", "INTU", "RELY", "PRCT",
 ]
 
 VERDICT_COLOR = {"buy": "#16a34a", "sell": "#dc2626", "hold": "#6b7280"}
@@ -188,11 +198,20 @@ with scan_tab:
         value=", ".join(DEFAULT_WATCHLIST),
         height=80,
     )
-    judge_buys = st.checkbox(
-        "Run LLM judge on buys", value=False,
-        help="After ranking, run the LLM judge on the names the baseline flagged as 'buy' "
-             "and show its verdict/confidence alongside.",
-    )
+    filter_col, judge_col = st.columns([2, 1])
+    with filter_col:
+        cap_filter = st.selectbox(
+            "Market cap filter",
+            options=["All", "Small cap (<$2B)", "Mid cap ($2B–$10B)", "Small+Mid (<$10B)"],
+            index=3,
+            help="Filter results to a specific market cap tier after scanning.",
+        )
+    with judge_col:
+        judge_buys = st.checkbox(
+            "Run LLM judge on buys", value=False,
+            help="After ranking, run the LLM judge on the names the baseline flagged as 'buy' "
+                 "and show its verdict/confidence alongside.",
+        )
     scan = st.button("Run scan", type="primary")
 
     if scan:
@@ -207,71 +226,99 @@ with scan_tab:
                 row = {"ticker": t, "blend": round(data["blended"], 3), "verdict": data["baseline"]}
                 for s in data["signals"]:
                     row[s["name"]] = round(s["score"], 2)
+                    if s["name"] == "targets":
+                        row["upside_pct"] = s["values"].get("upside_pct")
+                    if s["name"] == "fundamentals":
+                        row["market_cap"] = s["values"].get("market_cap")
                 rows.append(row)
             except Exception as e:
                 errors.append(f"{t}: {type(e).__name__}: {e}")
 
         progress.empty()
+        rows.sort(key=lambda r: -r["blend"])
+        st.session_state["scan_rows"]   = rows
+        st.session_state["scan_errors"] = errors
 
-        if rows:
-            rows.sort(key=lambda r: -r["blend"])
-            buys = [r for r in rows if r["verdict"] == "buy"]
+    # Streamlit re-runs the entire script on every interaction, so any local variable
+    # computed inside `if scan:` is lost the moment the user switches tabs. Storing in
+    # session_state is the only way to keep results visible when they come back.
+    # Render from session state so results survive tab switches.
+    rows   = st.session_state.get("scan_rows", [])
+    errors = st.session_state.get("scan_errors", [])
 
-            # LLM overlay on the buys only. We re-call analyze_ticker (cache-hit, so no
-            # extra network) to recover the live SignalResult objects and catalysts the
-            # Judge needs. A single judge failure (e.g. missing API key) is reported once
-            # and leaves the baseline scan fully intact.
-            if judge_buys and buys:
-                judge = Judge()
-                judge_error = None
-                judge_progress = st.progress(0.0, text="Judging buys…")
-                for i, r in enumerate(buys, start=1):
-                    judge_progress.progress(i / len(buys), text=f"Judging {r['ticker']} ({i}/{len(buys)})")
-                    try:
-                        d = analyze_ticker(r["ticker"])
-                        v = judge.decide(r["ticker"], d["_results"], catalysts=d["catalysts"])
-                        r["llm"]      = v.get("verdict")
-                        r["llm_conf"] = v.get("confidence")
-                    except Exception as e:
-                        # Bail on the first failure rather than retrying every buy. Judge
-                        # errors are almost always systemic — a missing/invalid API key, no
-                        # network, a rate limit — so the remaining calls would fail the same
-                        # way. Stopping shows one clear message instead of N identical ones,
-                        # and avoids burning further API calls that can't succeed.
-                        judge_error = f"{type(e).__name__}: {e}"
-                        break
-                judge_progress.empty()
-                if judge_error:
-                    st.error(
-                        f"LLM judge failed: {judge_error}\n\n"
-                        "Check that ANTHROPIC_API_KEY is set in your environment / .env."
-                    )
+    if rows:
+        # Apply market cap filter. Rows without market_cap data pass through rather
+        # than being silently dropped — unknown cap is better than a hidden miss.
+        CAP_SMALL = 2e9
+        CAP_MID   = 10e9
+        if cap_filter == "Small cap (<$2B)":
+            rows = [r for r in rows if r.get("market_cap") is None or r["market_cap"] < CAP_SMALL]
+        elif cap_filter == "Mid cap ($2B–$10B)":
+            rows = [r for r in rows if r.get("market_cap") is None or CAP_SMALL <= r["market_cap"] < CAP_MID]
+        elif cap_filter == "Small+Mid (<$10B)":
+            rows = [r for r in rows if r.get("market_cap") is None or r["market_cap"] < CAP_MID]
 
-            st.subheader(f"Results — {len(rows)} scored, {len(buys)} buys")
+        buys = [r for r in rows if r["verdict"] == "buy"]
 
-            st.dataframe(
-                rows,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "blend":    st.column_config.NumberColumn(format="%+.3f"),
-                    "llm":      st.column_config.TextColumn("LLM verdict"),
-                    "llm_conf": st.column_config.NumberColumn("LLM conf", format="%.2f"),
-                },
-            )
+        # LLM overlay on the buys only. We re-call analyze_ticker (cache-hit, so no
+        # extra network) to recover the live SignalResult objects and catalysts the
+        # Judge needs. A single judge failure (e.g. missing API key) is reported once
+        # and leaves the baseline scan fully intact.
+        if judge_buys and buys and scan:
+            judge = Judge()
+            judge_error = None
+            judge_progress = st.progress(0.0, text="Judging buys…")
+            for i, r in enumerate(buys, start=1):
+                judge_progress.progress(i / len(buys), text=f"Judging {r['ticker']} ({i}/{len(buys)})")
+                try:
+                    d = analyze_ticker(r["ticker"])
+                    v = judge.decide(r["ticker"], d["_results"], catalysts=d["catalysts"])
+                    r["llm"]      = v.get("verdict")
+                    r["llm_conf"] = v.get("confidence")
+                except Exception as e:
+                    # Bail on the first failure rather than retrying every buy. Judge
+                    # errors are almost always systemic — a missing/invalid API key, no
+                    # network, a rate limit — so the remaining calls would fail the same
+                    # way. Stopping shows one clear message instead of N identical ones,
+                    # and avoids burning further API calls that can't succeed.
+                    judge_error = f"{type(e).__name__}: {e}"
+                    break
+            judge_progress.empty()
+            if judge_error:
+                st.error(
+                    f"LLM judge failed: {judge_error}\n\n"
+                    "Check that ANTHROPIC_API_KEY is set in your environment / .env."
+                )
 
-            if buys:
-                def buy_label(r):
-                    base = f"{r['ticker']} ({r['blend']:+.3f})"
-                    if r.get("llm"):
-                        base += f" · LLM {r['llm']}"
-                    return base
-                st.success("Buys: " + ", ".join(buy_label(r) for r in buys))
-            else:
-                st.info("No buys — top 5 by blend: "
-                        + ", ".join(f"{r['ticker']} ({r['blend']:+.3f})" for r in rows[:5]))
+        st.subheader(f"Results — {len(rows)} scored, {len(buys)} buys")
 
-        if errors:
-            with st.expander(f"{len(errors)} error(s)"):
-                for e in errors:
-                    st.text(e)
+        st.dataframe(
+            rows,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "blend":      st.column_config.NumberColumn(format="%+.3f"),
+                "upside_pct": st.column_config.NumberColumn("Upside %", format="%.1f%%"),
+                "market_cap": st.column_config.NumberColumn(
+                    "Mkt cap", format="$%.0f", help="Market capitalisation in USD"
+                ),
+                "llm":        st.column_config.TextColumn("LLM verdict"),
+                "llm_conf":   st.column_config.NumberColumn("LLM conf", format="%.2f"),
+            },
+        )
+
+        if buys:
+            def buy_label(r):
+                base = f"{r['ticker']} ({r['blend']:+.3f})"
+                if r.get("llm"):
+                    base += f" · LLM {r['llm']}"
+                return base
+            st.success("Buys: " + ", ".join(buy_label(r) for r in buys))
+        else:
+            st.info("No buys — top 5 by blend: "
+                    + ", ".join(f"{r['ticker']} ({r['blend']:+.3f})" for r in rows[:5]))
+
+    if errors:
+        with st.expander(f"{len(errors)} error(s)"):
+            for e in errors:
+                st.text(e)

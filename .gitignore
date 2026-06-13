@@ -1,5 +1,4 @@
 .env
 __pycache__
-.venv
 src/__pycache__
 src/signals/__pycache__
