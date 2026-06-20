@@ -1,5 +1,5 @@
 import pandas as pd
-from base import Signal, SignalResult
+from .base import Signal, SignalResult
 
 
 class VolumeSignal(Signal):

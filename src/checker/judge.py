@@ -1,7 +1,8 @@
 import json
 from datetime import date, datetime
 import anthropic
-import config
+
+from . import config
 
 
 class Judge:
@@ -122,10 +123,25 @@ class Judge:
             "are uniformly weak, or agree only marginally; do not use it as a hedge against the "
             "ordinary risk that every position carries.\n\n"
             f"{earnings_guidance}\n\n"
+            "In addition to your verdict, provide realistic price targets grounded in the "
+            "signal data (analyst targets, momentum, fundamentals). For each target:\n"
+            "- near_term_target: a price the stock could reach in the near term (weeks to ~3 months), "
+            "expressed as a number. Use null if the setup does not support a directional target.\n"
+            "- near_term_timeframe: plain-English timeframe to reach it, e.g. '3-6 weeks'.\n"
+            "- long_term_target: a price achievable over a longer horizon (6-18 months), as a number. "
+            "Use null if there is insufficient basis to project.\n"
+            "- long_term_timeframe: plain-English timeframe, e.g. '9-12 months'.\n"
+            "Base targets on the analyst mean/high from the targets signal and the stock's "
+            "momentum and fundamental trajectory. Do not invent figures — if the data is too "
+            "thin, set the target to null and omit the timeframe.\n\n"
             "Respond ONLY with a JSON object, no other text, in this exact shape:\n"
             '{"verdict": "buy" | "hold" | "sell", '
             '"confidence": <number 0 to 1>, '
-            '"reasoning": "<two or three sentences>"}\n\n'
+            '"reasoning": "<two or three sentences>", '
+            '"near_term_target": <number or null>, '
+            '"near_term_timeframe": "<e.g. 4-6 weeks or null>", '
+            '"long_term_target": <number or null>, '
+            '"long_term_timeframe": "<e.g. 9-12 months or null>"}\n\n'
             "Here is the data:\n"
         )
 

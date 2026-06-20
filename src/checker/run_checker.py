@@ -1,21 +1,15 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-import argparse, sys, os
-# src/ and src/signals/ are added to the path separately, not imported as packages.
-# The signal modules reference each other by bare name (e.g. momentum.py does
-# `from base import Signal`), so the signals directory itself has to be importable —
-# adding only src/ would resolve `import momentum` but not its internal `from base`.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src", "signals"))
+import argparse, sys
 
-import config
-from get_data import MarketData
-from momentum import MomentumSignal
-from volume import VolumeSignal
-from fundamentals import FundamentalsSignal
-from targets import TargetsSignal
-from judge import Judge
+from src.checker import config
+from src.checker.get_data import MarketData
+from src.checker.signals.momentum import MomentumSignal
+from src.checker.signals.volume import VolumeSignal
+from src.checker.signals.fundamentals import FundamentalsSignal
+from src.checker.signals.targets import TargetsSignal
+from src.checker.judge import Judge
 
 
 def run_signals(md):
@@ -62,10 +56,24 @@ def weighted_blend(results):
     are set in config.SIGNAL_WEIGHTS and sum to 1.0. The LLM judge reasons over the
     same data and can diverge from this baseline — having both lets you compare the
     systematic score against the model's qualitative read.
+
+    Value-dislocation adjustment: when fundamentals and analyst targets both strongly
+    disagree with weak momentum, that pattern is most likely a temporary price dislocation
+    rather than a deteriorating business. In that case we halve momentum's negative
+    contribution so the pattern can score as a buy rather than stalling at the hold
+    boundary. The condition is deliberately tight — all three must clear a meaningful
+    threshold — so the adjustment only fires on genuine value setups, not marginal cases.
     '''
+    scores = {r.name: r.score for r in results}
     blended = 0.0
     for r in results:
-        blended += r.score * config.SIGNAL_WEIGHTS.get(r.name, 0)
+        weight = config.SIGNAL_WEIGHTS.get(r.name, 0)
+        score  = r.score
+        if (r.name == "momentum" and score < -0.2
+                and scores.get("fundamentals", 0) > 0.3
+                and scores.get("targets", 0) > 0.3):
+            score *= 0.5
+        blended += score * weight
     return blended
 
 
@@ -123,6 +131,15 @@ def main(use_llm=None):
         print(f"  verdict:    {verdict.get('verdict')}")
         print(f"  confidence: {verdict.get('confidence')}")
         print(f"  reasoning:  {verdict.get('reasoning')}")
+
+        nt = verdict.get('near_term_target')
+        nt_tf = verdict.get('near_term_timeframe')
+        lt = verdict.get('long_term_target')
+        lt_tf = verdict.get('long_term_timeframe')
+        if nt is not None:
+            print(f"  near-term target:  ${nt}  ({nt_tf})")
+        if lt is not None:
+            print(f"  long-term target:  ${lt}  ({lt_tf})")
 
         return verdict
 

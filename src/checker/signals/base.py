@@ -1,20 +1,10 @@
 class SignalResult:
-    '''Immutable result from a single signal evaluation.
-
-    score is the primary output: a float in [-1.0, +1.0] where -1 is maximum bearish
-    conviction, 0 is neutral, and +1 is maximum bullish conviction. The scale is enforced
-    here rather than in each signal so violations are caught at the source — a score outside
-    the range is always a bug in the signal's arithmetic, not a valid edge case.
-
-    values holds the intermediate numbers that produced the score (RSI level, PE ratio,
-    upside % etc.) so the LLM judge and any downstream consumer can reason over the raw
-    inputs, not just the summary score. A signal at -0.4 means very different things when
-    RSI is 28 (oversold bounce candidate) vs when every sub-metric is negative.
-    '''
+    '''Base class for all Signal results: fundamentas, momentum, targets and volume'''
 
     def __init__(self, name, score, values=None, note=""):
         self.name   = name
         self.score  = score
+        # All raw values
         self.values = values if values else {}
         self.note   = note
 

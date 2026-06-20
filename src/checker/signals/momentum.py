@@ -1,65 +1,45 @@
 import pandas as pd
-from base import Signal, SignalResult
+from .base import Signal, SignalResult
+from ..config import high_beta, low_beta, small_cap_threshold, large_cap_threshold
 
 
 class MomentumSignal(Signal):
 
     name = "momentum"
 
-    def __init__(self, beta=None, market_cap=None):
+    def __init__(self, beta = None, market_cap = None):
         # beta and market_cap are optional. If not provided, all thresholds fall back
         # to standard market-beta defaults so the signal still works without fundamentals.
         self.beta = beta
         self.market_cap = market_cap
 
     def thresholds(self):
-        '''Derive indicator parameters scaled to the stock's volatility and size profile.
-        Standard RSI/EMA/volume values were calibrated for a typical large-cap stock with
-        beta ~1. Applying them blindly to a high-beta small-cap will produce noisy,
-        misleading signals.'''
+        '''Derive indicator parameters scaled to the stock's volatility and size profile'''
 
         beta = self.beta
         mc = self.market_cap
 
-        # --- RSI overbought / oversold thresholds ---
-        # Beta measures how much a stock moves relative to the market (S&P 500 = 1.0).
-        # A high-beta stock (e.g. beta=2) swings twice as hard as the market in both directions.
-        # Its RSI hits above 70 on normal up-moves AND drops below 30 on normal pullbacks —
-        # both extremes are routine, not exceptional.
-        # Using 70/30 for a beta=2 stock would penalise it as "overbought" constantly.
-        # We scale the bands outward for high-beta and inward for low-beta (defensive stocks
-        # rarely hit extremes, so when they do it carries more weight).
-        if beta is None or 0.8 <= beta <= 1.5:
+        # The rsi limits for overbought and oversold and adjusted based on beta. A high beta stop regularly
+        # crosses rsi 70, so will always flag as overbought. So we use wider bands. Similar for low beta stocks
+        if beta is None or beta < 1.5:
             rsi_ob, rsi_os = 70, 30       # standard market-beta stock
-        elif beta > 1.5:
-            rsi_ob, rsi_os = 78, 22       # high-beta: wider bands, extremes are less rare
         else:
-            rsi_ob, rsi_os = 63, 37       # low-beta: tighter bands, extremes are more meaningful
+            rsi_ob, rsi_os = 78, 22       # high-beta: wider bands
 
-        # --- MACD fast / slow windows ---
         # Standard MACD uses 12-day and 26-day EMAs. For a high-beta stock the price swings
-        # so fast that the 26-day slow EMA can't keep up, causing the histogram to look like
-        # it's "expanding" even when momentum is actually cooling. Shorter windows (8/17)
-        # reduce that lag and give a more accurate picture of acceleration/deceleration.
-        macd_fast, macd_slow = (8, 17) if (beta is not None and beta > 1.5) else (12, 26)
+        # so fast, therefore we use shorter windows (8/17) to reduce that lag and give a more
+        # accurate picture of acceleration/deceleration.
+        macd_fast, macd_slow = (8, 17) if (beta is not None and beta > high_beta) else (12, 26)
 
-        # --- EMA periods ---
-        # Small caps can make their entire move — e.g. a 25% rally — in 2-3 weeks before
-        # reversing. A 50-day EMA lags so much that by the time it signals a crossover, most
-        # of the move is already over. Shorter periods (10/30) sacrifice some smoothness to
-        # catch the signal while there's still room to act. The tradeoff: more noise,
-        # earlier entry. For small caps the lag cost outweighs the noise cost.
-        ema_fast, ema_slow = (10, 30) if (mc is not None and mc < 2e9) else (20, 50)
+        # For a small cap, a 50-day EMA lags so much that by the time it signals a crossover,
+        # most of the move is already over. Shorter periods (10/30) sacrifice some smoothness to
+        # catch the signal while there's still room to act.
+        ema_fast, ema_slow = (10, 30) if (mc is not None and mc < small_cap_threshold) else (20, 50)
 
-        # --- Volume spike threshold ---
         # Relative volume = today's volume / 20-day average volume.
-        # For a mega-cap like Apple (50M+ shares/day), 1.3x means ~15M extra shares traded —
-        # that's real institutional conviction. For a $500M small-cap, 1.3x might just be
-        # one fund rebalancing its position. We set a higher bar for small caps to avoid
-        # treating ordinary daily noise as a meaningful volume confirmation.
-        if mc is None or mc >= 10e9:
+        if mc is None or mc >= large_cap_threshold:
             vol_threshold = 1.3           # large cap: 30% above average is significant
-        elif mc < 2e9:
+        elif mc < small_cap_threshold:
             vol_threshold = 1.8           # small cap: need 80% above average to matter
         else:
             vol_threshold = 1.5           # mid cap: middle ground
@@ -77,17 +57,13 @@ class MomentumSignal(Signal):
     def get_ema(self, df, span, source):
         '''Calculate the exponential moving average of a series.
         EMA gives more weight to recent values than older ones, making it more
-        responsive to new price action than a simple moving average.
-        Formula: EMA_today = price_today * k + EMA_yesterday * (1 - k), where k = 2 / (span + 1).
-        A larger span = smaller k = slower reaction to new prices.'''
+        responsive to new price action than a simple moving average'''
 
         values = df[source].tolist()
 
-        # k is the smoothing factor. For span=20: k=0.095 (9.5% weight on today's price).
-        # For span=10: k=0.182 (18.2%). Shorter span reacts faster to price changes.
+        # k is the smoothing factor. Shorter span reacts faster to price changes.
         k = 2 / (span + 1)
 
-        # Seed with the first price — there is no "yesterday" for bar 0
         ema_values = [values[0]]
 
         for i in range(1, len(values)):
@@ -112,11 +88,10 @@ class MomentumSignal(Signal):
         gains = delta.clip(lower=0)
 
         # losses: series of down-day moves as positive numbers, with 0 on up-days.
-        # We negate because delta is negative on down-days and we want a positive magnitude.
         losses = -delta.clip(upper=0)
 
-        # Wilder's smoothing — a specific type of EMA with alpha = 1/span.
-        # min_periods=span means the first valid average only appears after `span` bars,
+        # Wilder's smoothing: a specific type of EMA with alpha = 1/span.
+        # min_periods=span means the first valid average only appears after "span" bars,
         # preventing unreliable early readings from a small sample.
         avg_gain = gains.ewm(alpha=1 / span, min_periods=span).mean()
         avg_loss = losses.ewm(alpha=1 / span, min_periods=span).mean()
@@ -125,8 +100,8 @@ class MomentumSignal(Signal):
         # RS=3 means gains are 3x larger than losses on average over the window — bullish.
         rs = avg_gain / avg_loss
 
-        # Scale RS to a 0-100 range. When RS is large (many gains), 100/(1+RS) approaches 0
-        # and RSI approaches 100. When RS is near 0 (many losses), RSI approaches 0.
+        # Scale RS to a 0-100 range. When RS is large (many gains),  RSI approaches 100.
+        # When RS is near 0 (many losses), RSI approaches 0.
         rsi = 100 - (100 / (1 + rs))
 
         return rsi
@@ -134,7 +109,7 @@ class MomentumSignal(Signal):
     def get_macd(self, df, fast, slow, signal=9):
         '''Calculate the MACD line, signal line, and histogram.
         MACD captures momentum by comparing a fast EMA to a slow EMA.
-        When price rises quickly, the fast EMA pulls ahead of the slow one — the gap
+        When price rises quickly, the fast EMA pulls ahead of the slow one, the gap
         (MACD line) widens. When momentum stalls, the gap shrinks.'''
 
         ema_fast = self.get_ema(df, fast, "Close")
@@ -160,22 +135,16 @@ class MomentumSignal(Signal):
         return macd_line, signal_line, histogram
 
     def evaluate(self, data):
-        t = self.thresholds()
         df = data.copy()
-
-        # EMA accuracy degrades with insufficient history. The slow EMA needs roughly
-        # 2x its span in bars before its value stabilises (older data fades via exponential
-        # decay but never fully disappears — too few bars leaves the first price overweighted).
-        min_bars = t["ema_slow"] * 2
-        if len(df) < min_bars:
-            raise ValueError(f"momentum: need at least {min_bars} bars, got {len(df)}")
+        t = self.thresholds()
 
         df["ema_fast"] = self.get_ema(df, t["ema_fast"], "Close")
         df["ema_slow"] = self.get_ema(df, t["ema_slow"], "Close")
         df["rsi"] = self.get_rsi(df)
-        macd_line, signal_line, histogram = self.get_macd(df, fast=t["macd_fast"], slow=t["macd_slow"])
+        macd_line, signal_line, histogram = self.get_macd(df, fast=t["macd_fast"],
+                                                          slow=t["macd_slow"])
 
-        # Snapshot of the most recent bar — this is what we score
+        # Snapshot of the most recent bar, which scores are based on
         close_latest    = df.iloc[-1]["Close"]
         ema_fast_latest = df.iloc[-1]["ema_fast"]
         ema_slow_latest = df.iloc[-1]["ema_slow"]
@@ -183,15 +152,11 @@ class MomentumSignal(Signal):
         hist_latest     = histogram.iloc[-1]
         hist_prev       = histogram.iloc[-2]   # one bar ago, used to detect histogram direction
 
-        # Trend state: both conditions must hold for a clean trend.
         # in_uptrend: price is above both EMAs AND the fast EMA is above the slow EMA —
         # meaning both short-term and medium-term momentum are pointing up.
-        # Neither condition alone is enough — price above EMA-fast but below EMA-slow
-        # is a mixed/transitional state, not a confirmed trend.
         in_uptrend   = close_latest > ema_fast_latest > ema_slow_latest
         in_downtrend = close_latest < ema_fast_latest < ema_slow_latest
 
-        # --- Crossover recency ---
         # A boolean series: True on bars where ema_fast is above ema_slow.
         ema_cross_above = df["ema_fast"] > df["ema_slow"]
 

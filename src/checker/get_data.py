@@ -1,4 +1,16 @@
 import yfinance as yf
+import pandas as pd
+from datetime import date
+
+
+def _f(v):
+    """Cast a yfinance value to float, returning None if it can't be converted."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 class MarketData:
@@ -8,73 +20,80 @@ class MarketData:
         self.yf_obj = yf.Ticker(self.ticker)
 
     def get_bars(self):
+        df_daily = self.yf_obj.history(period="6mo", interval="1d").reset_index()
 
-        df_daily = self.yf_obj.history(period = "6mo", interval = "1d").reset_index()
-        df_hourly = self.yf_obj.history(period = "1wk", interval = "1h")
-        
+        # Drop today's partial bar so signals are always based on the last completed close.
+        # During market hours yfinance appends an in-progress bar for the current session,
+        # whose OHLCV values change tick-by-tick and would cause signal scores to shift
+        # throughout the day.
+        if not df_daily.empty and pd.Timestamp(df_daily["Date"].iloc[-1]).date() >= date.today():
+            df_daily = df_daily.iloc[:-1]
+
+        df_hourly = self.yf_obj.history(period="1wk", interval="1h")
+
         return df_daily, df_hourly
-        
+
     def get_fundamentals(self):
 
         info = self.yf_obj.info
 
         valuation = {
-            "trailing_pe": info.get("trailingPE"),
-            "forward_pe": info.get("forwardPE"),
-            "price_to_book": info.get("priceToBook"),
-            "price_to_sales": info.get("priceToSalesTrailing12Months"),
-            "ev_to_revenue": info.get("enterpriseToRevenue"),
-            "ev_to_ebitda": info.get("enterpriseToEbitda"),
-            "peg_ratio": info.get("trailingPegRatio"),
-            "market_cap": info.get("marketCap"),
+            "trailing_pe": _f(info.get("trailingPE")),
+            "forward_pe":  _f(info.get("forwardPE")),
+            "price_to_book":  _f(info.get("priceToBook")),
+            "price_to_sales": _f(info.get("priceToSalesTrailing12Months")),
+            "ev_to_revenue":  _f(info.get("enterpriseToRevenue")),
+            "ev_to_ebitda":   _f(info.get("enterpriseToEbitda")),
+            "peg_ratio":      _f(info.get("trailingPegRatio")),
+            "market_cap":     _f(info.get("marketCap")),
         }
 
         profitability = {
-            "profit_margin": info.get("profitMargins"),
-            "gross_margin": info.get("grossMargins"),
-            "operating_margin": info.get("operatingMargins"),
-            "return_on_equity": info.get("returnOnEquity"),
-            "return_on_assets": info.get("returnOnAssets"),
+            "profit_margin":    _f(info.get("profitMargins")),
+            "gross_margin":     _f(info.get("grossMargins")),
+            "operating_margin": _f(info.get("operatingMargins")),
+            "return_on_equity": _f(info.get("returnOnEquity")),
+            "return_on_assets": _f(info.get("returnOnAssets")),
         }
 
         growth = {
-            "revenue_growth": info.get("revenueGrowth"),
-            "earnings_growth": info.get("earningsGrowth"),
-            "earnings_quarterly_growth": info.get("earningsQuarterlyGrowth"),
+            "revenue_growth":            _f(info.get("revenueGrowth")),
+            "earnings_growth":           _f(info.get("earningsGrowth")),
+            "earnings_quarterly_growth": _f(info.get("earningsQuarterlyGrowth")),
         }
 
         health = {
-            "debt_to_equity": info.get("debtToEquity"),
-            "current_ratio": info.get("currentRatio"),
-            "quick_ratio": info.get("quickRatio"),
-            "total_debt": info.get("totalDebt"),
-            "total_cash": info.get("totalCash"),
-            "free_cashflow": info.get("freeCashflow"),
+            "debt_to_equity": _f(info.get("debtToEquity")),
+            "current_ratio":  _f(info.get("currentRatio")),
+            "quick_ratio":    _f(info.get("quickRatio")),
+            "total_debt":     _f(info.get("totalDebt")),
+            "total_cash":     _f(info.get("totalCash")),
+            "free_cashflow":  _f(info.get("freeCashflow")),
         }
 
         dividends = {
-            "dividend_yield": info.get("dividendYield"),
-            "payout_ratio": info.get("payoutRatio"),
+            "dividend_yield": _f(info.get("dividendYield")),
+            "payout_ratio":   _f(info.get("payoutRatio")),
             "ex_dividend_date": info.get("exDividendDate"),
         }
 
         context = {
-            "long_name": info.get("longName"),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
+            "long_name":        info.get("longName"),
+            "sector":           info.get("sector"),
+            "industry":         info.get("industry"),
             "business_summary": info.get("longBusinessSummary"),
-            "country": info.get("country"),
-            "currency": info.get("financialCurrency"),
+            "country":          info.get("country"),
+            "currency":         info.get("financialCurrency"),
         }
 
         return {
-            "valuation": valuation,
+            "valuation":     valuation,
             "profitability": profitability,
-            "growth": growth,
-            "health": health,
-            "dividends": dividends,
-            "context": context,
-            "beta": info.get("beta"),
+            "growth":        growth,
+            "health":        health,
+            "dividends":     dividends,
+            "context":       context,
+            "beta": _f(info.get("beta")),
         }
 
 
@@ -93,9 +112,9 @@ class MarketData:
             "revenue_estimate_high": cal.get("Revenue High"),
             "revenue_estimate_low": cal.get("Revenue Low"),
             }
-        
+
         return catalysts
-    
+
     def get_price_targets(self):
 
         pt = self.yf_obj.analyst_price_targets
@@ -110,7 +129,7 @@ class MarketData:
         }
 
         return price_targets
-    
+
     def get_fundamental_trends(self):
 
         fin = self.yf_obj.quarterly_income_stmt
@@ -122,7 +141,7 @@ class MarketData:
             "Operating Income": "operating_income",
             "Research And Development": "rnd",
         }
-        
+
         trends = {}
 
         for parameter, var_name in wanted.items():
@@ -130,7 +149,7 @@ class MarketData:
                 trends[var_name] = fin.loc[parameter].sort_index().tolist()
             else:
                 trends[var_name] = None
-        
+
         trends["Quarters"] = sorted(fin.columns.tolist())
 
         revenue = fin.loc["Total Revenue"].sort_index() if "Total Revenue" in fin.index else None

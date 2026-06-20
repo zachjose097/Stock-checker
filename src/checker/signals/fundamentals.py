@@ -1,4 +1,4 @@
-from base import Signal, SignalResult
+from .base import Signal, SignalResult
 
 
 # Growth sectors: the market pays premium multiples because earnings are expected to compound.
