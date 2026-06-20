@@ -1,5 +1,9 @@
 anthropic
+feedparser
+finnhub-python
 pandas
 python-dotenv
+requests
+requests-cache
 streamlit
 yfinance
