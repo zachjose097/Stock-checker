@@ -26,14 +26,15 @@ class SubstackScraper:
                     date_published = time.strftime("%Y/%m/%d", date_published)
 
                 text = self.strip_tags(content).strip()
-                tickers = extract_tickers_cashtag(text)
+                text_combined = f"{title}: {summary}\n{text}"
+                tickers = extract_tickers_cashtag(text_combined)
                 # tickers = extract_tickers_base(text, tickers)
 
                 post = {"title": title,
                         "account": substack_name,
                         "link": link,
                         "summary": summary,
-                        "content": f"{title}: {summary}\n{text}",
+                        "content": text_combined,
                         "tickers": tickers,
                         "created_at": date_published,
                         "source": "substack"

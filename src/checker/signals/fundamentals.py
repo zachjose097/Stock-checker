@@ -390,9 +390,12 @@ class FundamentalsSignal(Signal):
             "profit_margin":    profitability.get("profit_margin"),
             "operating_margin": profitability.get("operating_margin"),
             "roe":              profitability.get("return_on_equity"),
+            "roic":             profitability.get("return_on_invested_capital"),
             "current_ratio":    health.get("current_ratio"),
             "debt_to_equity":   health.get("debt_to_equity"),
             "metrics_used":     len(all_used),
+            # Not scored — carried through purely for display in the raw-values view.
+            "business_summary": context.get("business_summary"),
         }
 
         note = (

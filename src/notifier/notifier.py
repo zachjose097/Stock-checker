@@ -8,6 +8,7 @@ import sys
 ntfy_url = "https://ntfy.sh/zach-sell-notifier"
 
 class Sell_decision:
+    
 
     def __init__(self, key, value_dict):
         self.ticker = key
@@ -34,39 +35,53 @@ class Sell_decision:
 
         return pd.Series(ema_values, index = df.index)
 
+    def _can_trim(self, date_latest):
+        # Shared 2-day cooldown so a held condition trims once, not on every run.
+        return self.last_trim is None or (date_latest - self.last_trim).days >= 2
+
     def evaluate_rules(self, df):
+
+        # Normalise to tz-naive timestamps so comparisons with entry_date (always tz-naive)
+        # don't raise when an intraday timeframe returns tz-aware bars.
+        if getattr(df["Date"].dt, "tz", None) is not None:
+            df = df.copy()
+            df["Date"] = df["Date"].dt.tz_localize(None)
 
         close_latest = df.iloc[-1]["Close"]
         ema_20_latest = df.iloc[-1]["ema_20"]
+        ema_4_latest = df.iloc[-1]["ema_4"]
         date_latest = df.iloc[-1]["Date"]
 
-        # Track if price has ever traded above the 20EMA since entry
-        if close_latest > ema_20_latest:
+        # Everything is measured from entry; the post-entry bars are contiguous at the tail.
+        since_entry = df[df["Date"] >= self.entry_date]
+
+        # Track if price has ever traded above the 20EMA since entry. Scan every bar
+        # since entry so this is correct on the first evaluation, not just across runs.
+        if (since_entry["Close"] > since_entry["ema_20"]).any():
             self.ever_above_ema20 = True
 
-        # Rule 3 - full exit if price breaks below 20EMA after being above it
+        # Rule 3 - full exit if price breaks below 20EMA after being above it. Checked
+        # first on purpose: a trend break is a stronger signal than a profit-target trim.
         if close_latest < ema_20_latest and self.ever_above_ema20:
             return "Sell all shares"
 
-        # Rule 1 - round number trim
-        if self.exit_price is not None:
-            if close_latest >= self.exit_price:
+        # Rule 1 - round number trim once the target is reached.
+        if self.exit_price is not None and close_latest >= self.exit_price:
+            if self._can_trim(date_latest):
+                self.last_trim = date_latest
                 return f"Trim 20% - Rule 1 target {self.exit_price} hit"
 
-        # Not enough bars since entry for Rule 2 to be meaningful
-        bars_since_entry = len(df[df["Date"] >= self.entry_date])
-        if bars_since_entry < 3:
+        # Not enough bars since entry for Rule 2 to be meaningful.
+        if len(since_entry) < 4:
             return "No action"
 
-        # Rule 2 - trim if 3+ closes above 4EMA-high, now closing below it
-        ema_4_latest = df.iloc[-1]["ema_4"]
-        df["above_ema4"] = df["Close"] > df["ema_4"]
-
+        # Rule 2 - trim if the 3 prior bars closed above the 4EMA(high) and we now close
+        # below it. Slice the post-entry window so pre-entry bars never leak in.
         if close_latest < ema_4_latest:
-            if df.iloc[-4:-1]["above_ema4"].all():
-                if self.last_trim is None or (date_latest - self.last_trim).days >= 2:
-                    self.last_trim = date_latest
-                    return "Trim 20% of shares - Rule 2"
+            prior3 = since_entry.iloc[-4:-1]
+            if (prior3["Close"] > prior3["ema_4"]).all() and self._can_trim(date_latest):
+                self.last_trim = date_latest
+                return "Trim 20% of shares - Rule 2"
 
         return "No action"
 
@@ -93,12 +108,15 @@ class Sell_decision:
         return action
 
 def get_exit_price(entry_price):
+    # First round-number rung at or above a 30% gain. Canonical for both the CLI and the
+    # Streamlit app — app.py imports this rather than keeping its own copy. None above the
+    # top rung simply disables Rule 1 for that position.
     exit_price = entry_price * 1.3
-    ladder = [2, 5, 10, 20, 50, 100, 150, 200, 300, 500, 1000, 1500, 2000, 2500]
+    ladder = [2, 5, 10, 20, 50, 100, 150, 200, 300, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000]
 
-    for i in range(len(ladder)):
-        if ladder[i] >= exit_price:
-            return ladder[i]
+    for rung in ladder:
+        if rung >= exit_price:
+            return rung
 
     return None
 
@@ -116,30 +134,3 @@ def add_position():
                 "exit_price": get_exit_price(float(entry_price))}
 
     return ticker, position
-
-if __name__ == "__main__":
-
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "json_files", "positions.json")
-
-    if not os.path.exists(path):
-        with open(path, "w") as f:
-            json.dump({}, f)
-
-    with open(path) as f:
-        positions = json.load(f)
-
-    # Only prompt for new position when run manually with --add flag
-    # GitHub Actions runs without --add so this block is skipped automatically
-    if "--add" in sys.argv:
-        if input("Do you want to enter a new position?(y/n) ") == "y":
-            ticker, position = add_position()
-            positions[ticker] = position
-
-    for key, value_dict in positions.items():
-        sl = Sell_decision(key, value_dict)
-        action = sl.main()
-        positions[key]["last_trim"] = sl.last_trim.strftime("%Y-%m-%d") if sl.last_trim else None
-        positions[key]["ever_above_ema20"] = sl.ever_above_ema20
-
-    with open(path, "w") as f:
-        json.dump(positions, f)

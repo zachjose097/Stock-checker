@@ -3,3 +3,5 @@
 __pycache__/
 json_files/positions.json
 json_files/market_cap_cache.json
+.DS_Store
+.gitignore

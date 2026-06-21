@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import date
 
 
-def _f(v):
+def f(v):
     """Cast a yfinance value to float, returning None if it can't be converted."""
     if v is None:
         return None
@@ -33,47 +33,86 @@ class MarketData:
 
         return df_daily, df_hourly
 
+    def roic(self):
+        """Return on invested capital = NOPAT / invested capital, computed from the
+        latest annual financials. NOPAT is EBIT taxed at the effective tax rate.
+        Returns None if the required inputs aren't available."""
+        try:
+            income = self.yf_obj.income_stmt
+            balance = self.yf_obj.balance_sheet
+        except Exception:
+            return None
+
+        def latest(df, row):
+            # yfinance statements are ordered most-recent-column-first.
+            if df is None or row not in df.index:
+                return None
+            series = df.loc[row].dropna()
+            return f(series.iloc[0]) if not series.empty else None
+
+        ebit = latest(income, "EBIT")
+        if ebit is None:
+            ebit = latest(income, "Operating Income")
+
+        invested_capital = latest(balance, "Invested Capital")
+
+        if ebit is None or not invested_capital:
+            return None
+
+        tax_rate = latest(income, "Tax Rate For Calcs")
+        if tax_rate is None:
+            pretax = latest(income, "Pretax Income")
+            tax_provision = latest(income, "Tax Provision")
+            if pretax and tax_provision is not None:
+                tax_rate = tax_provision / pretax
+        if tax_rate is None or tax_rate < 0 or tax_rate > 1:
+            tax_rate = 0.21  # fall back to a typical corporate rate
+
+        nopat = ebit * (1 - tax_rate)
+        return nopat / invested_capital
+
     def get_fundamentals(self):
 
         info = self.yf_obj.info
 
         valuation = {
-            "trailing_pe": _f(info.get("trailingPE")),
-            "forward_pe":  _f(info.get("forwardPE")),
-            "price_to_book":  _f(info.get("priceToBook")),
-            "price_to_sales": _f(info.get("priceToSalesTrailing12Months")),
-            "ev_to_revenue":  _f(info.get("enterpriseToRevenue")),
-            "ev_to_ebitda":   _f(info.get("enterpriseToEbitda")),
-            "peg_ratio":      _f(info.get("trailingPegRatio")),
-            "market_cap":     _f(info.get("marketCap")),
+            "trailing_pe": f(info.get("trailingPE")),
+            "forward_pe":  f(info.get("forwardPE")),
+            "price_to_book":  f(info.get("priceToBook")),
+            "price_to_sales": f(info.get("priceToSalesTrailing12Months")),
+            "ev_to_revenue":  f(info.get("enterpriseToRevenue")),
+            "ev_to_ebitda":   f(info.get("enterpriseToEbitda")),
+            "peg_ratio":      f(info.get("trailingPegRatio")),
+            "market_cap":     f(info.get("marketCap")),
         }
 
         profitability = {
-            "profit_margin":    _f(info.get("profitMargins")),
-            "gross_margin":     _f(info.get("grossMargins")),
-            "operating_margin": _f(info.get("operatingMargins")),
-            "return_on_equity": _f(info.get("returnOnEquity")),
-            "return_on_assets": _f(info.get("returnOnAssets")),
+            "profit_margin":    f(info.get("profitMargins")),
+            "gross_margin":     f(info.get("grossMargins")),
+            "operating_margin": f(info.get("operatingMargins")),
+            "return_on_equity": f(info.get("returnOnEquity")),
+            "return_on_assets": f(info.get("returnOnAssets")),
+            "return_on_invested_capital": self.roic(),
         }
 
         growth = {
-            "revenue_growth":            _f(info.get("revenueGrowth")),
-            "earnings_growth":           _f(info.get("earningsGrowth")),
-            "earnings_quarterly_growth": _f(info.get("earningsQuarterlyGrowth")),
+            "revenue_growth":            f(info.get("revenueGrowth")),
+            "earnings_growth":           f(info.get("earningsGrowth")),
+            "earnings_quarterly_growth": f(info.get("earningsQuarterlyGrowth")),
         }
 
         health = {
-            "debt_to_equity": _f(info.get("debtToEquity")),
-            "current_ratio":  _f(info.get("currentRatio")),
-            "quick_ratio":    _f(info.get("quickRatio")),
-            "total_debt":     _f(info.get("totalDebt")),
-            "total_cash":     _f(info.get("totalCash")),
-            "free_cashflow":  _f(info.get("freeCashflow")),
+            "debt_to_equity": f(info.get("debtToEquity")),
+            "current_ratio":  f(info.get("currentRatio")),
+            "quick_ratio":    f(info.get("quickRatio")),
+            "total_debt":     f(info.get("totalDebt")),
+            "total_cash":     f(info.get("totalCash")),
+            "free_cashflow":  f(info.get("freeCashflow")),
         }
 
         dividends = {
-            "dividend_yield": _f(info.get("dividendYield")),
-            "payout_ratio":   _f(info.get("payoutRatio")),
+            "dividend_yield": f(info.get("dividendYield")),
+            "payout_ratio":   f(info.get("payoutRatio")),
             "ex_dividend_date": info.get("exDividendDate"),
         }
 
@@ -93,7 +132,7 @@ class MarketData:
             "health":        health,
             "dividends":     dividends,
             "context":       context,
-            "beta": _f(info.get("beta")),
+            "beta": f(info.get("beta")),
         }
 
 
@@ -129,6 +168,57 @@ class MarketData:
         }
 
         return price_targets
+
+    def get_insider_transactions(self, limit=10):
+        """Insider activity: a 6-month net buy/sell summary plus the most recent
+        individual transactions. Fields are None / empty when unavailable."""
+
+        activity = {
+            "purchase_shares":   None,
+            "purchase_count":    None,
+            "sale_shares":       None,
+            "sale_count":        None,
+            "net_shares":        None,
+            "total_shares_held": None,
+            "pct_net_shares":    None,
+        }
+
+        summary = self.yf_obj.insider_purchases
+        if summary is not None and not summary.empty:
+            # The label lives in the first column, whose header varies by ticker.
+            label_col = summary.columns[0]
+            rows = {str(r[label_col]): r for _, r in summary.iterrows()}
+
+            def grab(label, field):
+                row = rows.get(label)
+                return f(row[field]) if row is not None else None
+
+            activity["purchase_shares"]   = grab("Purchases", "Shares")
+            activity["purchase_count"]    = grab("Purchases", "Trans")
+            activity["sale_shares"]       = grab("Sales", "Shares")
+            activity["sale_count"]        = grab("Sales", "Trans")
+            activity["net_shares"]        = grab("Net Shares Purchased (Sold)", "Shares")
+            activity["total_shares_held"] = grab("Total Insider Shares Held", "Shares")
+            activity["pct_net_shares"]    = grab("% Net Shares Purchased (Sold)", "Shares")
+
+        recent = []
+        txns = self.yf_obj.insider_transactions
+        if txns is not None and not txns.empty:
+            for _, row in txns.head(limit).iterrows():
+                recent.append({
+                    "insider":     row.get("Insider"),
+                    "position":    row.get("Position"),
+                    "transaction": row.get("Transaction"),
+                    "shares":      f(row.get("Shares")),
+                    "value":       f(row.get("Value")),
+                    "date":        row.get("Start Date"),
+                    "ownership":   row.get("Ownership"),
+                })
+
+        return {
+            "net_activity_6m":     activity,
+            "recent_transactions": recent,
+        }
 
     def get_fundamental_trends(self):
 

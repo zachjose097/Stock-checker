@@ -13,7 +13,6 @@ api_key = os.getenv("x-rapidapi-key")
 api_host = os.getenv("x-rapidapi-host")
 
 user_ids_path = Path(__file__).parents[3] / "json_files" / "user_ids.json"
-print(user_ids_path)
 os.makedirs(user_ids_path.parent, exist_ok=True)
 
 cache_dir = Path(__file__).parent.parent / "Cached_sessions"

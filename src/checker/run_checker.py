@@ -9,6 +9,7 @@ from src.checker.signals.momentum import MomentumSignal
 from src.checker.signals.volume import VolumeSignal
 from src.checker.signals.fundamentals import FundamentalsSignal
 from src.checker.signals.targets import TargetsSignal
+from src.checker.signals.insider import InsiderSignal
 from src.checker.judge import Judge
 
 
@@ -28,6 +29,7 @@ def run_signals(md):
     fundamentals  = md.get_fundamentals()
     trends        = md.get_fundamental_trends()
     price_targets = md.get_price_targets()
+    insider       = md.get_insider_transactions()
 
     market_cap = fundamentals.get("valuation", {}).get("market_cap")
     beta       = fundamentals.get("beta")
@@ -46,6 +48,7 @@ def run_signals(md):
         VolumeSignal(market_cap=market_cap).evaluate(df_daily),
         FundamentalsSignal().evaluate(fundamentals, trends=trends),
         TargetsSignal().evaluate(targets_data),
+        InsiderSignal().evaluate(insider),
     ]
 
 

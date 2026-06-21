@@ -4,7 +4,7 @@ import os
 import yfinance as yf
 from pathlib import Path
 
-_CAP_CACHE_PATH = os.path.join(Path(__file__).parents[3], "json_files", "market_cap_cache.json")
+_CAP_CACHE_PATH = os.path.join(Path(__file__).parents[2], "json_files", "market_cap_cache.json")
 _CAP_CACHE_TTL  = timedelta(days=7)
 
 from .scrapers.substack import SubstackScraper
@@ -16,7 +16,6 @@ class Aggregator:
 
     def __init__(self, source):
         self.source = source
-        self._market_cap_cache = {}
 
     def collect(self, scraper_fn, accounts):
         ''' Fetch the posts from an account depending on the source (X, reddit, substack)'''
@@ -141,18 +140,49 @@ class Aggregator:
                 except Exception:
                     persistent[ticker] = {"market_cap": None, "cap_category": "unknown", "cached_at": now.isoformat()}
 
-            try:
-                with open(_CAP_CACHE_PATH, "w") as f:
-                    json.dump(persistent, f, indent=2)
-            except Exception:
-                pass
+            os.makedirs(os.path.dirname(_CAP_CACHE_PATH), exist_ok=True)
+            with open(_CAP_CACHE_PATH, "w") as f:
+                json.dump(persistent, f, indent=2)
 
         result = {}
         for ticker in tickers:
             entry = persistent.get(ticker, {"market_cap": None, "cap_category": "unknown"})
-            self._market_cap_cache[ticker] = entry
             result[ticker] = entry
         return result
+
+    def merge_ticker_summaries(self, top_tickers, ticker_summary_x, ticker_summary_substack):
+        by_ticker = {entry["ticker"]: entry for entry in top_tickers}
+        accounts_seen = {}  # ticker -> set of distinct accounts across x + substack
+        account_mentions = {}  # ticker -> {account: total mentions across x + substack}
+
+        for source_summary in [ticker_summary_x, ticker_summary_substack]:
+            for ticker, summary in source_summary.items():
+                if ticker not in by_ticker:
+                    by_ticker[ticker] = {
+                        "ticker": ticker,
+                        "source_count": 0,
+                        "avg_buzz_score": 0,
+                        "bull_bear_ratio": None,
+                        "trend_direction": "unknown",
+                    }
+                by_ticker[ticker]["source_count"] += 1
+                by_ticker[ticker]["mentions"] = by_ticker[ticker].get("mentions", 0) + summary["total"]
+                accounts_seen.setdefault(ticker, set()).update(summary["by_creator"].keys())
+                # Accumulate per-account counts so we can surface the single account that
+                # mentioned this ticker most across X and Substack combined.
+                per_account = account_mentions.setdefault(ticker, {})
+                for account, count in summary["by_creator"].items():
+                    per_account[account] = per_account.get(account, 0) + count
+
+        for ticker, acct_set in accounts_seen.items():
+            by_ticker[ticker]["unique_accounts"] = len(acct_set)
+
+        for ticker, per_account in account_mentions.items():
+            top_account, top_count = max(per_account.items(), key=lambda kv: kv[1])
+            by_ticker[ticker]["top_account"] = top_account
+            by_ticker[ticker]["top_account_mentions"] = top_count
+
+        return sorted(by_ticker.values(), key=lambda x: (x["source_count"], x["avg_buzz_score"]), reverse=True)
 
     def recommend_top_tickers(self, top_tickers, n=15):
         def score(entry):
@@ -184,15 +214,10 @@ class Aggregator:
         top_news_tickers = self.score_adanos_tickers(AdanosScraper("news").get_trending())
 
         top_tickers = self.combine_adanos_sources(top_reddit_tickers, top_x_tickers, top_news_tickers)
+        top_tickers = self.merge_ticker_summaries(top_tickers, ticker_summary_x, ticker_summary_substack)
 
-        # market_caps = self.get_market_cap_category([t["ticker"] for t in top_tickers])
-        # for entry in top_tickers:
-        #     entry.update(market_caps.get(entry["ticker"], {"market_cap": None, "cap_category": "unknown"}))
-
-        # recommendations = self.recommend_top_tickers(top_tickers)
-
-        return ticker_summary_x, ticker_summary_substack, top_tickers
+        return top_tickers
 
 if __name__ == "__main__":
-    ticker_summary_x, ticker_summary_substack, top_tickers = Aggregator("substack").aggregate()
-    print(ticker_summary_x)
+    top_tickers = Aggregator("combined").aggregate()
+    print(top_tickers)
